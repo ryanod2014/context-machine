@@ -41,19 +41,6 @@ async function saveComments(comments: Comment[]): Promise<void> {
   await fs.writeFile(COMMENTS_FILE, JSON.stringify(comments, null, 2))
 }
 
-// Strip markdown syntax for comparison (links, bold, italic, etc.)
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // [text](url) -> text
-    .replace(/\*\*([^*]+)\*\*/g, '$1')         // **bold** -> bold
-    .replace(/\*([^*]+)\*/g, '$1')             // *italic* -> italic
-    .replace(/`([^`]+)`/g, '$1')               // `code` -> code
-    .replace(/^-\s+/gm, '')                    // list markers at line start
-    .replace(/\s+-\s+(?=[A-Z])/g, ' ')         // list markers between items (dash before capital letter)
-    .replace(/^\d+\.\s+/gm, '')                // numbered list markers
-    .replace(/^#+\s+/gm, '')                   // headings
-}
-
 // POST - Accept or reject diff
 export async function POST(
   request: NextRequest,
@@ -84,63 +71,24 @@ export async function POST(
 
       const { original, replacement } = comment.proposedDiff
 
-      // Try exact match first
+      // Claude should provide exact text from the file, so exact match should work
       if (content.includes(original)) {
         content = content.replace(original, replacement)
       } else {
-        // Fuzzy matching: TipTap collapses whitespace and strips markdown when displaying
-        // We need to find matching content in the file more carefully
+        // Fallback: try normalizing whitespace (but keep structure)
+        const normalizedOriginal = original.replace(/\r\n/g, '\n').trim()
+        const normalizedContent = content.replace(/\r\n/g, '\n')
 
-        // Try a simpler approach: search for the first significant phrase from the original
-        // This avoids replacing too much content
-        const firstPhrase = original.split(/[.!?\n]/).filter(s => s.trim().length > 10)[0]?.trim()
-
-        if (!firstPhrase) {
+        if (normalizedContent.includes(normalizedOriginal)) {
+          content = normalizedContent.replace(normalizedOriginal, replacement)
+        } else {
+          console.error('Diff match failed. Original text not found in file.')
+          console.error('Looking for:', original.slice(0, 100))
+          console.error('File preview:', content.slice(0, 300))
           return NextResponse.json({
-            error: 'Could not extract search phrase from original text.',
+            error: 'Original text not found in file. The AI may have provided incorrect text. Try creating a new comment.',
           }, { status: 400 })
         }
-
-        // Strip markdown from file and search for the phrase
-        const lines = content.split('\n')
-        let matchStart = -1
-        let matchEnd = -1
-
-        // Find lines that contain the beginning of our selection
-        const normalizedPhrase = stripMarkdown(firstPhrase).replace(/\s+/g, ' ').trim().toLowerCase()
-
-        for (let i = 0; i < lines.length; i++) {
-          const normalizedLine = stripMarkdown(lines[i]).replace(/\s+/g, ' ').trim().toLowerCase()
-
-          if (normalizedLine.includes(normalizedPhrase.slice(0, 30))) {
-            // Found start - now find end by counting similar number of lines
-            // Estimate based on original text line count
-            const originalLineCount = original.split(/\n/).filter(l => l.trim()).length
-            matchStart = i
-            matchEnd = Math.min(i + Math.max(originalLineCount * 2, 1), lines.length - 1)
-
-            // Trim matchEnd to skip empty lines at end
-            while (matchEnd > matchStart && !lines[matchEnd].trim()) {
-              matchEnd--
-            }
-            break
-          }
-        }
-
-        if (matchStart < 0) {
-          console.error('Diff match failed:', {
-            searchPhrase: normalizedPhrase.slice(0, 50),
-            filePreview: content.slice(0, 300)
-          })
-          return NextResponse.json({
-            error: 'Original text not found in file. The file may have changed.',
-          }, { status: 400 })
-        }
-
-        // Replace the matched lines with the replacement
-        const beforeLines = lines.slice(0, matchStart)
-        const afterLines = lines.slice(matchEnd + 1)
-        content = [...beforeLines, replacement, ...afterLines].join('\n')
       }
 
       // Save the file

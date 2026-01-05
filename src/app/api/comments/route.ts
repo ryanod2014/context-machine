@@ -150,12 +150,12 @@ ${availableFiles.length > 20 ? `... and ${availableFiles.length - 20} more files
 If you want to suggest a text change, use this EXACT format at the END of your response:
 
 <propose_diff>
-<original>exact text to replace (must match exactly)</original>
+<original>exact text from the DOCUMENT CONTENT above</original>
 <replacement>improved text</replacement>
 <explanation>brief reason for change</explanation>
 </propose_diff>
 
-The <original> MUST be an exact substring from the selected text or nearby content.
+CRITICAL: The <original> MUST be copied EXACTLY from the "FULL DOCUMENT CONTENT" section - including all markdown syntax, line breaks, and formatting. Do NOT use the "SELECTED TEXT" for <original> because it may have formatting stripped. Find the corresponding section in the full document and copy it exactly.
 
 ## GUIDELINES
 - Be concise and actionable

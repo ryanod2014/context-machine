@@ -64,12 +64,12 @@ You're reviewing a file from the campaign context machine. When the user comment
 IMPORTANT: If you want to suggest an edit, you MUST use this exact format at the END of your response:
 
 <propose_diff>
-<original>exact text to replace</original>
+<original>exact text from the Full context section</original>
 <replacement>new text</replacement>
 <explanation>why this change improves the copy</explanation>
 </propose_diff>
 
-The <original> text MUST exactly match text from the selected portion. Be concise and actionable.`
+CRITICAL: The <original> MUST be copied EXACTLY from the "Full context" section - including all markdown syntax, line breaks, and formatting. Do NOT use the "Selected text" for <original> because it may have formatting stripped. Find the corresponding section in the full context and copy it character-for-character.`
 
   const conversationMessages = messages.map(m => ({
     role: m.role as 'user' | 'assistant',
