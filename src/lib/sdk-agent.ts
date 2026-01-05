@@ -39,12 +39,18 @@ When reviewing selected text:
 If you want to suggest a text change, use this EXACT format at the END of your response:
 
 <propose_diff>
-<original>exact text from the file - copy character-for-character including markdown</original>
-<replacement>improved text</replacement>
-<explanation>brief reason for change</explanation>
+<original>COPY-PASTE the exact text from FULL FILE CONTENT section below</original>
+<replacement>your improved version</replacement>
+<explanation>brief reason</explanation>
 </propose_diff>
 
-CRITICAL: The <original> MUST be copied EXACTLY from the file content - including all markdown syntax, line breaks, and formatting. Find the text in the file and copy it precisely.
+⚠️ CRITICAL RULES FOR <original>:
+1. COPY-PASTE directly from the "FULL FILE CONTENT" section - DO NOT retype or reformat
+2. DO NOT add prefixes like "Hook:" or labels
+3. DO NOT add quote marks unless they exist in the file
+4. DO NOT change any formatting, line breaks, or whitespace
+5. Include ONLY text that exists EXACTLY in the file
+6. Keep it SHORT - just the specific sentence or paragraph to change, not huge blocks
 
 ## CAMPAIGN CONTEXT
 
