@@ -41,6 +41,19 @@ async function saveComments(comments: Comment[]): Promise<void> {
   await fs.writeFile(COMMENTS_FILE, JSON.stringify(comments, null, 2))
 }
 
+// Strip markdown syntax for comparison (links, bold, italic, etc.)
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // [text](url) -> text
+    .replace(/\*\*([^*]+)\*\*/g, '$1')         // **bold** -> bold
+    .replace(/\*([^*]+)\*/g, '$1')             // *italic* -> italic
+    .replace(/`([^`]+)`/g, '$1')               // `code` -> code
+    .replace(/^-\s+/gm, '')                    // list markers at line start
+    .replace(/\s+-\s+(?=[A-Z])/g, ' ')         // list markers between items (dash before capital letter)
+    .replace(/^\d+\.\s+/gm, '')                // numbered list markers
+    .replace(/^#+\s+/gm, '')                   // headings
+}
+
 // POST - Accept or reject diff
 export async function POST(
   request: NextRequest,
@@ -75,33 +88,50 @@ export async function POST(
       if (content.includes(original)) {
         content = content.replace(original, replacement)
       } else {
-        // TipTap collapses whitespace when selecting text, so we need
-        // whitespace-normalized matching to find the actual text block
-        const normalizedOriginal = original.replace(/\s+/g, ' ').trim()
+        // Fuzzy matching: TipTap collapses whitespace and strips markdown when displaying
+        // We need to find matching content in the file more carefully
 
-        // Find matching block in file by accumulating consecutive lines
+        // Try a simpler approach: search for the first significant phrase from the original
+        // This avoids replacing too much content
+        const firstPhrase = original.split(/[.!?\n]/).filter(s => s.trim().length > 10)[0]?.trim()
+
+        if (!firstPhrase) {
+          return NextResponse.json({
+            error: 'Could not extract search phrase from original text.',
+          }, { status: 400 })
+        }
+
+        // Strip markdown from file and search for the phrase
         const lines = content.split('\n')
         let matchStart = -1
         let matchEnd = -1
 
-        for (let i = 0; i < lines.length; i++) {
-          let accumulated = ''
-          for (let j = i; j < lines.length; j++) {
-            accumulated += (accumulated ? ' ' : '') + lines[j].trim()
-            const normalizedAccum = accumulated.replace(/\s+/g, ' ')
+        // Find lines that contain the beginning of our selection
+        const normalizedPhrase = stripMarkdown(firstPhrase).replace(/\s+/g, ' ').trim().toLowerCase()
 
-            if (normalizedAccum === normalizedOriginal) {
-              matchStart = i
-              matchEnd = j
-              break
+        for (let i = 0; i < lines.length; i++) {
+          const normalizedLine = stripMarkdown(lines[i]).replace(/\s+/g, ' ').trim().toLowerCase()
+
+          if (normalizedLine.includes(normalizedPhrase.slice(0, 30))) {
+            // Found start - now find end by counting similar number of lines
+            // Estimate based on original text line count
+            const originalLineCount = original.split(/\n/).filter(l => l.trim()).length
+            matchStart = i
+            matchEnd = Math.min(i + Math.max(originalLineCount * 2, 1), lines.length - 1)
+
+            // Trim matchEnd to skip empty lines at end
+            while (matchEnd > matchStart && !lines[matchEnd].trim()) {
+              matchEnd--
             }
-            // Stop if we've gone too far past the expected length
-            if (normalizedAccum.length > normalizedOriginal.length + 50) break
+            break
           }
-          if (matchStart >= 0) break
         }
 
         if (matchStart < 0) {
+          console.error('Diff match failed:', {
+            searchPhrase: normalizedPhrase.slice(0, 50),
+            filePreview: content.slice(0, 300)
+          })
           return NextResponse.json({
             error: 'Original text not found in file. The file may have changed.',
           }, { status: 400 })
