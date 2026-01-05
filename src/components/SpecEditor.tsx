@@ -293,7 +293,36 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
     if (!selection || !newCommentText.trim()) return
 
     const positions = pendingSelectionRef.current
+    const commentText = newCommentText
+    const selectedText = selection.text
+
+    // Create optimistic comment immediately
+    const tempId = `temp-${Date.now()}`
+    const optimisticComment: Comment = {
+      id: tempId,
+      filePath,
+      selectionStart: positions?.from || 0,
+      selectionEnd: positions?.to || 0,
+      selectedText,
+      status: 'open',
+      messages: [
+        {
+          id: `msg-${Date.now()}`,
+          role: 'user',
+          content: commentText,
+          createdAt: new Date().toISOString()
+        }
+      ],
+      createdAt: new Date().toISOString()
+    }
+
+    // Close modal immediately and show comment
+    setComments(prev => [...prev, optimisticComment])
+    setSelectedComment(tempId)
+    pendingSelectionRef.current = null
+    clearSelection()
     setIsSubmitting(true)
+
     try {
       const res = await fetch('/api/comments', {
         method: 'POST',
@@ -302,21 +331,21 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
           filePath,
           selectionStart: positions?.from || 0,
           selectionEnd: positions?.to || 0,
-          selectedText: selection.text,
-          message: newCommentText
+          selectedText,
+          message: commentText
         })
       })
       const data = await res.json()
 
       if (data.comment) {
-        setComments(prev => [...prev, data.comment])
+        // Replace optimistic comment with real one
+        setComments(prev => prev.map(c => c.id === tempId ? data.comment : c))
         setSelectedComment(data.comment.id)
       }
-
-      pendingSelectionRef.current = null
-      clearSelection()
     } catch (error) {
       console.error('Error creating comment:', error)
+      // Remove optimistic comment on error
+      setComments(prev => prev.filter(c => c.id !== tempId))
     }
     setIsSubmitting(false)
   }
@@ -740,6 +769,17 @@ function CommentCard({
             </div>
           )
         })}
+        {/* Loading indicator */}
+        {isSubmitting && isSelected && comment.messages.length === 1 && (
+          <div className="flex items-center gap-2 text-purple-400">
+            <div className="text-xs mb-0.5">AI</div>
+            <div className="flex gap-1">
+              <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Diff */}
