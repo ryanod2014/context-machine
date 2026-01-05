@@ -86,6 +86,8 @@ export async function POST(request: NextRequest) {
       async start(controller) {
         let fullResponse = ''
 
+        let proposedDiff: { original: string; replacement: string; explanation: string } | undefined
+
         try {
           // Send comment ID first
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'comment_id', id: commentId })}\n\n`))
@@ -103,37 +105,24 @@ export async function POST(request: NextRequest) {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'tool', name: event.toolName, input: event.toolInput })}\n\n`))
             } else if (event.type === 'error') {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', content: event.content })}\n\n`))
+            } else if (event.type === 'done' && event.proposedDiff) {
+              // Capture diff from tool call
+              proposedDiff = event.proposedDiff
             }
-          }
-
-          // Parse for proposed diff
-          const diffMatch = fullResponse.match(
-            /<propose_diff>\s*<original>([\s\S]*?)<\/original>\s*<replacement>([\s\S]*?)<\/replacement>\s*<explanation>([\s\S]*?)<\/explanation>\s*<\/propose_diff>/
-          )
-
-          let diff: { original: string; replacement: string; explanation: string } | undefined
-          let cleanResponse = fullResponse
-
-          if (diffMatch) {
-            diff = {
-              original: diffMatch[1].trim(),
-              replacement: diffMatch[2].trim(),
-              explanation: diffMatch[3].trim()
-            }
-            cleanResponse = fullResponse.replace(diffMatch[0], '').trim()
           }
 
           // Add assistant message
           const assistantMessage: CommentMessage = {
             id: crypto.randomUUID(),
             role: 'assistant',
-            content: cleanResponse,
+            content: fullResponse,
             createdAt: new Date().toISOString()
           }
           comment.messages.push(assistantMessage)
 
-          if (diff) {
-            comment.proposedDiff = diff
+          // Add diff from tool call if present
+          if (proposedDiff) {
+            comment.proposedDiff = proposedDiff
           }
 
           // Save comment

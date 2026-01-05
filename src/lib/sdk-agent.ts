@@ -1,21 +1,62 @@
 /**
  * Agent implementation using Claude Agent SDK
- * Provides built-in tools for file search, grep, and reading
+ * Uses custom propose_diff tool for reliable diff proposals
  */
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { z } from "zod";
 
 const BASE_PATH = process.env.CAMPAIGNS_PATH || '/Users/ryanodonnell/projects/DG_27_AI_Frontend';
+
+// Store proposed diff from tool calls (per request)
+let lastProposedDiff: { original: string; replacement: string; explanation: string } | undefined;
+
+// Create MCP server with propose_diff tool
+function createCommentToolsServer() {
+  return createSdkMcpServer({
+    name: "comment-tools",
+    version: "1.0.0",
+    tools: [
+      tool(
+        "propose_diff",
+        `Propose a change to the selected text. Use this when you want to suggest an edit or improvement.
+
+The diff will be shown to the user who can Accept (apply the change) or Reject (continue discussion).
+
+IMPORTANT: The 'original' field must be EXACT text from the file - copy-paste it precisely.`,
+        {
+          original: z.string().describe("The EXACT original text from the file being replaced - copy-paste precisely"),
+          replacement: z.string().describe("The new text to replace it with"),
+          explanation: z.string().describe("Brief explanation of why this change improves the copy"),
+        },
+        async (args) => {
+          lastProposedDiff = {
+            original: args.original,
+            replacement: args.replacement,
+            explanation: args.explanation,
+          };
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Diff proposed successfully.`
+            }],
+          };
+        }
+      ),
+    ],
+  });
+}
 
 // System prompt for the marketing copy assistant
 const SYSTEM_PROMPT = `You are a marketing copywriting expert assistant helping review and improve campaign content for Dean Graziosi and Tony Robbins' AI Advantage campaigns.
 
 ## YOUR CAPABILITIES
 
-You have access to these built-in tools:
+You have access to these tools:
 - **Read** - Read any file in the project
 - **Grep** - Search file contents with regex patterns
 - **Glob** - Find files by pattern (e.g., "**/*.md")
+- **propose_diff** - Suggest a text change (user can accept/reject)
 
 ## WHEN TO USE TOOLS
 
@@ -24,44 +65,24 @@ USE Read/Grep/Glob when:
 - Looking for testimonials, hooks, or examples
 - Need to understand the broader campaign context
 - Comparing different ad variations
-- Finding specific phrases or patterns across files
 
-## RESPONDING TO COMMENTS
-
-When reviewing selected text:
-1. Consider the context (what file, what section)
-2. Search for related content if helpful (testimonials, hooks, etc.)
-3. Provide actionable feedback
-4. Propose specific edits when appropriate
+USE propose_diff when:
+- User asks you to improve/change/rewrite something
+- You see an opportunity to make the copy better
+- User agrees with your suggestion and wants it applied
 
 ## PROPOSING EDITS
 
-If you want to suggest a text change, use this EXACT format at the END of your response:
-
-<propose_diff>
-<original>COPY-PASTE the exact text from FULL FILE CONTENT section below</original>
-<replacement>your improved version</replacement>
-<explanation>brief reason</explanation>
-</propose_diff>
-
-⚠️ CRITICAL RULES FOR <original>:
-1. COPY-PASTE directly from the "FULL FILE CONTENT" section - DO NOT retype or reformat
-2. DO NOT add prefixes like "Hook:" or labels
-3. DO NOT add quote marks unless they exist in the file
-4. DO NOT change any formatting, line breaks, or whitespace
-5. Include ONLY text that exists EXACTLY in the file
-6. Keep it SHORT - just the specific sentence or paragraph to change, not huge blocks
+When using propose_diff:
+1. The 'original' MUST be exact text from the file - copy-paste it
+2. Keep changes focused - one sentence or paragraph at a time
+3. Explain why the change improves the copy
 
 ## CAMPAIGN CONTEXT
 
-The campaigns folder contains:
-- Ad copy for Facebook/Instagram
-- Landing pages
-- Email sequences
-- Testimonials and social proof
-- Different audience segments and angles
+The campaigns folder contains ad copy, landing pages, email sequences, testimonials, and different audience segments.
 
-Be concise but thorough. Focus on what will make the copy more compelling and effective.
+Be concise and actionable. Focus on what makes copy more compelling.
 `;
 
 export interface AgentEvent {
@@ -69,6 +90,7 @@ export interface AgentEvent {
   content: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
+  proposedDiff?: { original: string; replacement: string; explanation: string };
 }
 
 /**
@@ -82,6 +104,12 @@ export async function* streamAgentResponse(
     fileContent: string;
   }
 ): AsyncGenerator<AgentEvent> {
+  // Reset proposed diff for this request
+  lastProposedDiff = undefined;
+
+  // Create the tools server
+  const toolsServer = createCommentToolsServer();
+
   // Build the prompt with context
   const prompt = `## CURRENT FILE
 Path: ${fileContext.filePath}
@@ -102,10 +130,14 @@ ${userMessage}`;
       prompt,
       options: {
         systemPrompt: SYSTEM_PROMPT,
+        mcpServers: {
+          "comment-tools": toolsServer,
+        },
         allowedTools: [
           "Read",
           "Grep",
           "Glob",
+          "mcp__comment-tools__propose_diff",
         ],
         workingDirectory: BASE_PATH,
         permissionMode: "acceptEdits",
@@ -137,7 +169,8 @@ ${userMessage}`;
       }
     }
 
-    yield { type: "done", content: "" };
+    // Yield done event with any proposed diff
+    yield { type: "done", content: "", proposedDiff: lastProposedDiff };
   } catch (error) {
     yield {
       type: "error",
