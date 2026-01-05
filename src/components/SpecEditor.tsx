@@ -324,7 +324,8 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
     setIsSubmitting(true)
 
     try {
-      const res = await fetch('/api/comments', {
+      // Use streaming endpoint
+      const res = await fetch('/api/comments/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -335,12 +336,65 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
           message: commentText
         })
       })
-      const data = await res.json()
 
-      if (data.comment) {
-        // Replace optimistic comment with real one
-        setComments(prev => prev.map(c => c.id === tempId ? data.comment : c))
-        setSelectedComment(data.comment.id)
+      if (!res.body) throw new Error('No response body')
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let realCommentId = tempId
+      let streamedContent = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value)
+        const lines = chunk.split('\n')
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = JSON.parse(line.slice(6))
+
+          if (data.type === 'comment_id') {
+            realCommentId = data.id
+            // Update the comment ID
+            setComments(prev => prev.map(c => c.id === tempId ? { ...c, id: realCommentId } : c))
+            setSelectedComment(realCommentId)
+          } else if (data.type === 'text') {
+            streamedContent += data.content
+            // Update the assistant message content as it streams
+            setComments(prev => prev.map(c => {
+              if (c.id === realCommentId) {
+                const hasAssistant = c.messages.some(m => m.role === 'assistant')
+                if (!hasAssistant) {
+                  return {
+                    ...c,
+                    messages: [...c.messages, {
+                      id: `assistant-${Date.now()}`,
+                      role: 'assistant' as const,
+                      content: streamedContent,
+                      createdAt: new Date().toISOString()
+                    }]
+                  }
+                } else {
+                  return {
+                    ...c,
+                    messages: c.messages.map(m =>
+                      m.role === 'assistant' ? { ...m, content: streamedContent } : m
+                    )
+                  }
+                }
+              }
+              return c
+            }))
+          } else if (data.type === 'tool') {
+            // Could show tool usage in UI
+            console.log('Tool used:', data.name, data.input)
+          } else if (data.type === 'done') {
+            // Final update with complete comment data
+            setComments(prev => prev.map(c => c.id === realCommentId ? data.comment : c))
+          }
+        }
       }
     } catch (error) {
       console.error('Error creating comment:', error)
