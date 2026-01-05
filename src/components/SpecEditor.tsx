@@ -209,33 +209,63 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
       const searchText = comment.selectedText
       if (!searchText || searchText.length < 3) return
 
-      // Find text in DOM using TreeWalker
+      // Normalize search text (TipTap collapses whitespace when selecting)
+      const normalizedSearch = searchText.replace(/\s+/g, ' ').trim().toLowerCase()
+
+      // Collect all text nodes and build accumulated text
       const walker = document.createTreeWalker(editorDom, NodeFilter.SHOW_TEXT, null)
+      const textNodes: { node: Text; start: number; end: number }[] = []
+      let accumulated = ''
       let node: Text | null
 
       while ((node = walker.nextNode() as Text)) {
         const nodeText = node.textContent || ''
-        const index = nodeText.indexOf(searchText)
+        if (!nodeText.trim()) continue
 
-        if (index !== -1) {
+        const start = accumulated.length
+        accumulated += (accumulated ? ' ' : '') + nodeText.trim()
+        textNodes.push({ node, start, end: accumulated.length })
+      }
+
+      // Search in normalized accumulated text
+      const normalizedAccum = accumulated.toLowerCase()
+      const matchIndex = normalizedAccum.indexOf(normalizedSearch)
+
+      if (matchIndex !== -1) {
+        const matchEnd = matchIndex + normalizedSearch.length
+        const matchingRects: DOMRect[] = []
+
+        // Find which text nodes overlap with our match
+        for (const { node, start, end } of textNodes) {
+          if (end <= matchIndex || start >= matchEnd) continue
+
           try {
             const range = document.createRange()
-            range.setStart(node, index)
-            range.setEnd(node, Math.min(index + searchText.length, nodeText.length))
+            const nodeText = node.textContent || ''
 
-            const rects = Array.from(range.getClientRects()).map(rect => ({
-              ...rect.toJSON(),
-              top: rect.top - containerRect.top + editorContainerRef.current!.scrollTop,
-              left: rect.left - containerRect.left,
-            })) as DOMRect[]
+            // Calculate offsets within this node
+            const nodeMatchStart = Math.max(0, matchIndex - start)
+            const nodeMatchEnd = Math.min(nodeText.length, matchEnd - start)
 
-            if (rects.length > 0) {
-              newHighlights.push({ commentId: comment.id, rects })
+            if (nodeMatchStart < nodeMatchEnd) {
+              range.setStart(node, Math.min(nodeMatchStart, nodeText.length))
+              range.setEnd(node, Math.min(nodeMatchEnd, nodeText.length))
+
+              Array.from(range.getClientRects()).forEach(rect => {
+                matchingRects.push({
+                  ...rect.toJSON(),
+                  top: rect.top - containerRect.top + editorContainerRef.current!.scrollTop,
+                  left: rect.left - containerRect.left,
+                } as DOMRect)
+              })
             }
           } catch {
             // Ignore errors
           }
-          break
+        }
+
+        if (matchingRects.length > 0) {
+          newHighlights.push({ commentId: comment.id, rects: matchingRects })
         }
       }
     })
@@ -597,10 +627,6 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
             }}
           >
             <div className="p-4">
-              <div className="text-xs text-purple-400 font-medium mb-2">SELECTED TEXT</div>
-              <div className="text-sm text-white/80 bg-black/30 p-3 rounded-lg max-h-24 overflow-y-auto border border-white/10 mb-3">
-                {selection.text.length > 150 ? selection.text.slice(0, 150) + '...' : selection.text}
-              </div>
               <textarea
                 value={newCommentText}
                 onChange={(e) => setNewCommentText(e.target.value)}

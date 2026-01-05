@@ -71,14 +71,47 @@ export async function POST(
 
       const { original, replacement } = comment.proposedDiff
 
-      // Apply the diff
-      if (!content.includes(original)) {
-        return NextResponse.json({
-          error: 'Original text not found in file. The file may have changed.',
-        }, { status: 400 })
-      }
+      // Try exact match first
+      if (content.includes(original)) {
+        content = content.replace(original, replacement)
+      } else {
+        // TipTap collapses whitespace when selecting text, so we need
+        // whitespace-normalized matching to find the actual text block
+        const normalizedOriginal = original.replace(/\s+/g, ' ').trim()
 
-      content = content.replace(original, replacement)
+        // Find matching block in file by accumulating consecutive lines
+        const lines = content.split('\n')
+        let matchStart = -1
+        let matchEnd = -1
+
+        for (let i = 0; i < lines.length; i++) {
+          let accumulated = ''
+          for (let j = i; j < lines.length; j++) {
+            accumulated += (accumulated ? ' ' : '') + lines[j].trim()
+            const normalizedAccum = accumulated.replace(/\s+/g, ' ')
+
+            if (normalizedAccum === normalizedOriginal) {
+              matchStart = i
+              matchEnd = j
+              break
+            }
+            // Stop if we've gone too far past the expected length
+            if (normalizedAccum.length > normalizedOriginal.length + 50) break
+          }
+          if (matchStart >= 0) break
+        }
+
+        if (matchStart < 0) {
+          return NextResponse.json({
+            error: 'Original text not found in file. The file may have changed.',
+          }, { status: 400 })
+        }
+
+        // Replace the matched lines with the replacement
+        const beforeLines = lines.slice(0, matchStart)
+        const afterLines = lines.slice(matchEnd + 1)
+        content = [...beforeLines, replacement, ...afterLines].join('\n')
+      }
 
       // Save the file
       await fs.writeFile(filePath, content, 'utf-8')
