@@ -23,10 +23,13 @@ turndown.addRule('paragraph', {
   replacement: (content) => `\n${content}\n`
 })
 
-// Configure marked for HTML output
+// Configure marked for HTML output - disable links
+const renderer = new marked.Renderer()
+renderer.link = ({ text }) => text // Convert links to plain text
 marked.setOptions({
   breaks: true,
   gfm: true,
+  renderer,
 })
 
 interface Comment {
