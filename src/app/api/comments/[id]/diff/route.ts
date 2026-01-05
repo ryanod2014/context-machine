@@ -71,16 +71,52 @@ export async function POST(
 
       const { original, replacement } = comment.proposedDiff
 
-      // Claude should provide exact text from the file, so exact match should work
+      // Try exact match first
       if (content.includes(original)) {
         content = content.replace(original, replacement)
       } else {
-        // Fallback: try normalizing whitespace (but keep structure)
-        const normalizedOriginal = original.replace(/\r\n/g, '\n').trim()
-        const normalizedContent = content.replace(/\r\n/g, '\n')
+        // Fuzzy matching: TipTap strips formatting (numbers, markdown)
+        // Find text by searching for key phrases
 
-        if (normalizedContent.includes(normalizedOriginal)) {
-          content = normalizedContent.replace(normalizedOriginal, replacement)
+        // Normalize for comparison: strip list markers, collapse whitespace
+        const normalize = (text: string) => text
+          .replace(/^\d+\.\s+/gm, '')  // Remove numbered list markers
+          .replace(/^-\s+/gm, '')       // Remove bullet markers
+          .replace(/\s+/g, ' ')         // Collapse whitespace
+          .trim()
+          .toLowerCase()
+
+        const normalizedOriginal = normalize(original)
+
+        // Find matching block in file
+        const lines = content.split('\n')
+        let matchStart = -1
+        let matchEnd = -1
+
+        // Try to find first line of original in file
+        const firstPhrase = normalizedOriginal.split(/[.!?\n]/).filter(s => s.trim().length > 10)[0]?.trim()
+
+        if (firstPhrase) {
+          for (let i = 0; i < lines.length; i++) {
+            const normalizedLine = normalize(lines[i])
+            if (normalizedLine.includes(firstPhrase.slice(0, 30))) {
+              matchStart = i
+              // Estimate end based on how many lines original spans
+              const originalLineCount = original.split('\n').filter(l => l.trim()).length
+              matchEnd = Math.min(i + originalLineCount + 2, lines.length - 1)
+
+              // Trim empty lines at end
+              while (matchEnd > matchStart && !lines[matchEnd].trim()) matchEnd--
+              break
+            }
+          }
+        }
+
+        if (matchStart >= 0) {
+          // Replace the matched section
+          const beforeLines = lines.slice(0, matchStart)
+          const afterLines = lines.slice(matchEnd + 1)
+          content = [...beforeLines, replacement, ...afterLines].join('\n')
         } else {
           console.error('Diff match failed. Original text not found in file.')
           console.error('Looking for:', original.slice(0, 100))
