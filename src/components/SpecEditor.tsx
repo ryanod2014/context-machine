@@ -80,9 +80,14 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [showCommentModal, setShowCommentModal] = useState(false)
+  const [highlights, setHighlights] = useState<Array<{
+    commentId: string
+    rects: DOMRect[]
+  }>>([])
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const lastSavedContent = useRef(content)
+  const editorContainerRef = useRef<HTMLDivElement>(null)
 
   // Store selection positions for new comments
   const pendingSelectionRef = useRef<{ from: number; to: number } | null>(null)
@@ -190,6 +195,53 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
     }
   }, [editor])
 
+  // Calculate highlight positions for open comments
+  useEffect(() => {
+    if (!editor || !editorContainerRef.current) return
+
+    const openCommentsList = comments.filter(c => c.status === 'open')
+    const newHighlights: Array<{ commentId: string; rects: DOMRect[] }> = []
+
+    const editorDom = editor.view.dom
+    const containerRect = editorContainerRef.current.getBoundingClientRect()
+
+    openCommentsList.forEach(comment => {
+      const searchText = comment.selectedText
+      if (!searchText || searchText.length < 3) return
+
+      // Find text in DOM using TreeWalker
+      const walker = document.createTreeWalker(editorDom, NodeFilter.SHOW_TEXT, null)
+      let node: Text | null
+
+      while ((node = walker.nextNode() as Text)) {
+        const nodeText = node.textContent || ''
+        const index = nodeText.indexOf(searchText)
+
+        if (index !== -1) {
+          try {
+            const range = document.createRange()
+            range.setStart(node, index)
+            range.setEnd(node, Math.min(index + searchText.length, nodeText.length))
+
+            const rects = Array.from(range.getClientRects()).map(rect => ({
+              ...rect.toJSON(),
+              top: rect.top - containerRect.top + editorContainerRef.current!.scrollTop,
+              left: rect.left - containerRect.left,
+            })) as DOMRect[]
+
+            if (rects.length > 0) {
+              newHighlights.push({ commentId: comment.id, rects })
+            }
+          } catch {
+            // Ignore errors
+          }
+          break
+        }
+      }
+    })
+
+    setHighlights(newHighlights)
+  }, [editor, comments])
 
   async function loadComments() {
     try {
@@ -383,7 +435,28 @@ export default function SpecEditor({ filePath, content, onSave }: SpecEditorProp
         )}
 
         {/* TipTap Editor */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto relative" ref={editorContainerRef}>
+          {/* Highlight overlays for open comments */}
+          {highlights.map(highlight => (
+            highlight.rects.map((rect, idx) => (
+              <div
+                key={`${highlight.commentId}-${idx}`}
+                className="absolute bg-yellow-400/30 cursor-pointer hover:bg-yellow-400/50 transition-colors"
+                style={{
+                  top: rect.top,
+                  left: rect.left,
+                  width: rect.width,
+                  height: rect.height,
+                  pointerEvents: 'auto',
+                  zIndex: 5,
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setSelectedComment(highlight.commentId)
+                }}
+              />
+            ))
+          ))}
           <style jsx global>{`
             .ProseMirror {
               min-height: 100%;
